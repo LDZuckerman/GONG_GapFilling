@@ -1,16 +1,0 @@
-/var/spool/slurmd/job23733264/slurm_script: line 27: cd: Solar_Gap_Filling/: No such file or directory
-Running experiment with expfile exp_todo/exp_file_simpleRNN.json
-/pl/active/NSO-IT/data/leah/Solar_GapFilling/Solar_Gap_Filling
-['exp_todo', 'test_hist.png', 'test.png', '~', 'utils', 'run_model_gpu.sh', '__pycache__', 'run_model_cpu.sh', 'run_model.py', '.ipynb_checkpoints']
-RUNNING EXPERIMENT SimpleRNN1 
-exp dict: {'name': 'SimpleRNN1', 'model_name': 'SimpleRNN', 'img_size': 128, 'loss_name': 'MSE', 'num_epochs': 3, 'batch_size': 16, 'learning_rate': 0.01}
-Experiment output dir ../model_runs/SimpleRNN1/ already exists - contents will be overwritten
-Copying exp dict into ../model_runs/SimpleRNN1/exp_file.json
-Loading data
-Train data:
-	1720 obs, broken into 108 batches
-	Each image has shape torch.Size([16, 15, 128, 128])
-	Each batch has data of shape torch.Size([16, 15, 128, 128]), e.g. 16 images, [128, 128] pixels each, 15 layers (features)
-Training SimpleRNN1 (training on cpu)
-Epoch 0
-  Batch 0slurmstepd: error: *** JOB 23733264 ON c3cpu-c15-u3-3 CANCELLED AT 2026-02-12T09:51:07 ***
