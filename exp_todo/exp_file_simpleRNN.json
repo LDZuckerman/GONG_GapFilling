@@ -1,0 +1,1 @@
+{"name": "SimpleRNN3", "model_name": "SimpleRNN", "img_size": 128, "loss_name": "MSE", "num_epochs": 20, "batch_size": 16, "learning_rate": 0.1}

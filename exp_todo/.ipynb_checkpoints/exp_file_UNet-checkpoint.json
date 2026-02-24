@@ -1,0 +1,1 @@
+{"name": "UNet2", "model_name": "UNet", "img_size": 128, "loss_name": "MSE", "num_epochs": 100, "batch_size": 16, "learning_rate": 0.1}
