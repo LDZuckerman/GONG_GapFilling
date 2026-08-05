@@ -1,1 +1,1 @@
-{"name": "UNet2", "model_name": "UNet", "img_size": 128, "loss_name": "MSE", "num_epochs": 100, "batch_size": 16, "learning_rate": 0.1}
+{"name": "UNet38", "dataset": "NN_Data_2019_40_20_cluster_pixels", "model_name": "UNet1D", "loss_name": "Selected_MSE_1D", "num_epochs": 20, "batch_size": 16, "learning_rate": 0.2}

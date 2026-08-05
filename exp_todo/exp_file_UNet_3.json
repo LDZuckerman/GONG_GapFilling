@@ -1,0 +1,1 @@
+{"name": "UNet37", "dataset": "NN_Data_2019_40_20_cluster", "model_name": "UNet", "img_size": 128, "convblock_depth": 4, "loss_name": "Regional_MSE", "ctr_wgt":1000, "num_epochs": 20, "batch_size": 16, "learning_rate": 0.2, "freq_filter":"False"}

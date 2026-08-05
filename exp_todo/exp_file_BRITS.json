@@ -1,0 +1,1 @@
+{"name": "BRITS0", "dataset": "NN_Data_2019_20_10_cluster", "model_name": "BRITS_mod", "img_size": 128, "loss_name": "MSE", "num_epochs": 3, "batch_size": 16, "learning_rate": 0.1, "freq_filter":"False", "rnn_hid_size":64, "seq_len":48}

@@ -1,0 +1,1 @@
+{"name": "UNet39", "dataset": "NN_Data_2019_40_20_cluster", "model_name": "UNet", "img_size": 256, "convblock_depth": 4, "loss_name": "Selected_MSE", "num_epochs": 20, "batch_size": 16, "learning_rate": 0.1, "freq_filter": "False"}
