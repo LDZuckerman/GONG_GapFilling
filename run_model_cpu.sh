@@ -1,6 +1,6 @@
 #!/bin/bash
    
-#SBATCH --account=ucb520_asc2 # To use additional resources
+#SBATCH --account=ucb520_asc3 # To use additional resources
 #SBATCH --output=../../Jobs/Job-%j.out  #../Jobs/Job-%j.out
 #SBATCH --nodes=1           # number of nodes to request  
 
@@ -21,10 +21,8 @@ gpu=False
 module purge
 module load rocm/6.1
 module load miniforge # module load mambaforge/23.1.0-1
-conda activate pytorch241_rocm61 #mamba activate pytorch241_rocm61
+conda activate pytorch241_rocm61_new #mamba activate pytorch241_rocm61
 export PYTHONNOUSERSITE=1
-
-#cd Solar_Gap_Filling/
 
 while getopts "f:" flag; do
  case $flag in
@@ -32,9 +30,9 @@ while getopts "f:" flag; do
  esac
 done
 
-echo "Running experiment with expfile $expfile"
+echo "Running experiment with expfile $expfile and gpu=$gpu " 
 python run_model.py -gpu $gpu -f $expfile
 
 #####
-# run from ../ with 'sbatch run_model_cpu.sh -f exp_todo/exp_file_simpleRNN.json'
+# run from ../ with 'sbatch run_model_cpu.sh -f exp_todo/exp_file_WNet.json'
 ######
