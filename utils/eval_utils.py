@@ -16,7 +16,7 @@ sys.path.append('/pl/active/NSO-IT/data/leah/Solar_GapFilling/GONG_GapFilling/')
 from utils import models, run_utils, data_utils
 
 
-def get_modelDF(modeldir='', tag='', dtag=None, print_skipped=True, redo_metrics=False):
+def get_modelDF(modeldir='', tag='', dtag=None, add_back_longts=True, print_skipped=True, redo_metrics=False, redo_li_metrics=False):
     '''
     Create dataframe of all run models, their parameters, and results 
     '''
@@ -29,10 +29,10 @@ def get_modelDF(modeldir='', tag='', dtag=None, print_skipped=True, redo_metrics
         # Load exp dict and use if dataset = dtag
         exp_dict = json.load(open(f'{modeldir}/{expdir}/exp_file.json','rb'))
         exp_dict['dataset'] = 'NN_Data_Ini1819_15_03_rand' if 'dataset' not in exp_dict else exp_dict['dataset']
-        if exp_dict['dataset'] != 'NN_Data_'+dtag:
+        if exp_dict['dataset'] not in ['NN_Data_'+dtag, 'NN_Data_'+dtag+'_shortTS']:
             continue
         
-        # Skip if not finished training 
+        # Skip if not finished training  
         if not os.path.exists(f'{modeldir}/{expdir}/test_preds_scale'):
             if print_skipped:
                 print(f'Skipping {expdir}; not finished training')
@@ -42,7 +42,8 @@ def get_modelDF(modeldir='', tag='', dtag=None, print_skipped=True, redo_metrics
         if not os.path.exists(f'{modeldir}/{expdir}/val_metrics.pkl') or redo_metrics:
             print(f'Computing validation set metrics for {modeldir}/{expdir}')
             if 'pixels' not in dtag:
-                val_metrics = prediction_validation_results(output_dir=f'{modeldir}/{expdir}/test_preds_scale') # metrics on normalized val preds
+                shortts = True if 'shortTS' in exp_dict['dataset'] else False
+                val_metrics = prediction_validation_results(output_dir=f'{modeldir}/{expdir}/test_preds_scale', shortts=shortts) # metrics on normalized val preds
             else:
                 val_metrics = prediction_validation_results_1D(output_dir=f'{modeldir}/{expdir}/test_preds_scale')
             pickle.dump(val_metrics, open(f'{modeldir}/{expdir}/val_metrics.pkl', 'wb'))
@@ -70,7 +71,7 @@ def get_modelDF(modeldir='', tag='', dtag=None, print_skipped=True, redo_metrics
           
     # Add row for interp as comparison
     if 'pixels' not in dtag:
-        if os.path.exists(f'{modeldir}/linear_interpolation/LI_metrics_{dtag}.pkl'):
+        if os.path.exists(f'{modeldir}/linear_interpolation/LI_metrics_{dtag}.pkl') and not redo_li_metrics:
             LI_metrics = pickle.load(open(f'{modeldir}/linear_interpolation/LI_metrics_{dtag}.pkl', 'rb'))
         else:
             print(f'Computing metrics for linear interp trained on dataset {dtag}')
@@ -118,10 +119,11 @@ def compare_across_dsets(mods, datasets, modeldir='', metric='rmse', redo_metric
                     convblock_depth = 2 if 'convblock_depth' not in d.keys() else d['convblock_depth']
                     xs0, ys0 = next(iter(test_loader))
                     if d['model_name'] == 'UNet':
-                        model = models.UNet(len_set=xs0.shape[1], convblock_depth=convblock_depth)
+                        model = models.UNet(len_set=xs0.shape[1])
                     elif d['model_name'] == 'UNet2':
                         model = models.UNet2(len_set=xs0.shape[1], convblock_depth=convblock_depth)
                     model.load_state_dict(torch.load(f'{modeldir}/{moddir}/{moddir}.pth', weights_only=True, map_location=torch.device('cpu')))
+                    model.eval()
                     run_utils.save_model_results(test_loader, save_dir=dataset_preds_dir , model=model, prnt=False)
                 
                 # Save metric
@@ -171,16 +173,23 @@ def get_LIDF(datasets=['2008_40_20_cluster','2019_40_20_cluster','2024_40_20_clu
     return all_info
     
 
-def prediction_validation_results(output_dir):
+def prediction_validation_results(output_dir, shortts):
     '''
     Compute average error metrics on validation predictions
-    NOTE: normalize first so that metrics are on normalized data 
+    NOTE: normalize first so that metrics are on normalized data
+    NOTE: for short-timescale-only models, compute metrics on data with long-timescales added back in
     '''
 
-    # Get all true, pred, and input files
-    truefiles = [file for file in np.sort(os.listdir(output_dir)) if 'true' in file]
-    predfiles = [file for file in np.sort(os.listdir(output_dir)) if 'pred' in file]
-    inputfiles = [file for file in np.sort(os.listdir(output_dir)) if 'x' in file]
+    # Get all true, pred, and input file names
+    shortts_str = '_shortts' if shortts else ''
+    truefiles = [file for file in np.sort(os.listdir(output_dir)) if f'true{shortts_str}' in file]
+    predfiles = [file for file in np.sort(os.listdir(output_dir)) if f'pred{shortts_str}' in file]
+    inputfiles = [file for file in np.sort(os.listdir(output_dir)) if f'x{shortts_str}' in file]
+    
+    # # If short-timescale-only dataset and want to add long-timescale predictions back in for evaluation
+    # if shortts and add_back_longts:
+    #     truefiles_og = [file for file in np.sort(os.listdir(output_dir)) if 'true_og' in file]
+    #     inputfiles_longts = [file for file in np.sort(os.listdir(output_dir)) if 'x_longts' in file] # actual used input
     
     # Initialize metrics and dict
     val_metrics = {}
@@ -205,9 +214,16 @@ def prediction_validation_results(output_dir):
     for i in range(len(truefiles)):
 
         # Load true, pred, and input set
-        true = np.load(f'{output_dir}/{truefiles[i]}')
-        pred = np.load(f'{output_dir}/{predfiles[i]}')
-        inp = np.load(f'{output_dir}/{inputfiles[i]}')
+        if not shortts:
+            true = np.load(f'{output_dir}/{truefiles[i]}')
+            pred = np.load(f'{output_dir}/{predfiles[i]}')
+            inp = np.load(f'{output_dir}/{inputfiles[i]}')
+        else:
+            true = np.load(f'{output_dir}/{truefiles[i].replace(".npy","_og.npy")}') # use the original (full) true
+            inp = np.load(f'{output_dir}/{inputfiles[i]}') # dont actually need
+            inplong = np.load(f'{output_dir}/{inputfiles[i].replace(".npy","_longts.npy")}') # get the long-ts-only input to add back to pred
+            pred = np.load(f'{output_dir}/{predfiles[i]}') 
+            pred = pred + inplong
         
         # Normalize
         try:

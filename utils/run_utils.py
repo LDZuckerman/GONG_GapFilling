@@ -66,9 +66,11 @@ def get_model(d, xs0, device):
     elif d['model_name'] == 'SimpleRNN':
         model = models.SimpleRNN(n_pix=xs0.shape[2], hidden_channels=[16, 32], num_layers=2).to(device)
     elif d['model_name'] == 'UNet':
-        model = models.UNet(len_set=xs0.shape[1], convblock_depth=d['convblock_depth']).to(device)
+        convblock_depth = 2 if 'convblock_depth' not in d.keys() else d['convblock_depth']
+        model = models.UNet(len_set=xs0.shape[1], convblock_depth=convblock_depth).to(device)
     elif d['model_name'] == 'UNet2':
-        model = models.UNet2(len_set=xs0.shape[1], convblock_depth=d['convblock_depth']).to(device)
+        convblock_depth = 2 if 'convblock_depth' not in d.keys() else d['convblock_depth']
+        model = models.UNet2(len_set=xs0.shape[1], convblock_depth=convblock_depth).to(device)
     elif d['model_name'] == 'BRITS_mod':
         model = models.BRITS_mod(rnn_hid_size=d['rnn_hid_size'], seq_len=d['seq_len']).to(device)
     elif d['model_name'] == 'CNN1D':
@@ -97,13 +99,19 @@ def save_model_results(val_loader, file_names, save_dir, model, device='cpu', pr
     
     # Loop over val loader and get results
     i = 0
-    for X, y in val_loader:
+    for dat in val_loader:
         
         # Get inputs and target
-        X, y = X.to(device), y.to(device)
-        if torch.is_tensor(y):
-            y = y.cpu().detach().numpy()
-            
+        shortts = True if 'shortts' in file_names[0] else False
+        if shortts:
+            X, y, X_og, y_og, X_longts, y_longts = dat
+            X, y, X_og, y_og, X_longts, y_longts = X.to(device), y.to(device), X_og.to(device), y_og.to(device), X_longts.to(device), y_longts.to(device)
+        else:
+            X, y = dat
+            X, y = X.to(device), y.to(device)
+            if torch.is_tensor(y):
+                y = y.cpu().detach().numpy()
+
         # Pass normalized inputs to model, re-scale predictions
         X_norm = (X - torch.min(X[~torch.isnan(X)])) / (torch.max(X[~torch.isnan(X)]) - torch.min(X[~torch.isnan(X)]))
         preds_norm = model(X_norm).cpu().detach()
@@ -113,9 +121,20 @@ def save_model_results(val_loader, file_names, save_dir, model, device='cpu', pr
         # Save preds
         if preds.shape[0] > 1: # if not pixel-wise
             for j in range(np.shape(preds)[0]):
+                
+                # Save inputs, predictions, and trues
                 np.save(f'{save_dir}/x_{i}', X[j].cpu().detach().numpy())
                 np.save(f'{save_dir}/true_{i}', np.array(y[j]))
                 np.save(f'{save_dir}/pred_{i}', np.array(preds[j]))
+                
+                # If short-timescale-only model, save full and long-ts-only inputs and trues too
+                if shortts:
+                    np.save(f'{save_dir}/x_og_{i}', X_og[j].cpu().detach().numpy())
+                    np.save(f'{save_dir}/true_og_{i}', np.array(y_og[j]))
+                    np.save(f'{save_dir}/x_longts_{i}', X_longts[j].cpu().detach().numpy())
+                    np.save(f'{save_dir}/true_longts_{i}', np.array(y_longts[j]))
+
+                # Save start times
                 if file_names != None:
                     starttimes_dict[i] = starttimes[i]
                 i += 1  

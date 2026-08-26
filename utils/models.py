@@ -106,12 +106,65 @@ class SimpleRNN(nn.Module):
 # UNet
 ######   
 
+# class UNet(nn.Module):
+#     '''
+#     UNet for [N_img, N_pix, N_pix] -> [N_img, N_pix, N_pix] 
+#     '''
+    
+#     def __init__(self, len_set, hidden_channels=[64, 128, 256, 512],): # len_set, k_size=3, padding_mode='zeros', hidden_channels=[16, 64])
+        
+#         super(UNet, self).__init__() 
+        
+#         self.ups = nn.ModuleList() 
+#         self.downs = nn.ModuleList()
+#         self.pool = nn.MaxPool2d(kernel_size=2, stride=2) 
+        
+#         in_channels = len_set
+#         for n_chans in hidden_channels:
+#             self.downs.append(DoubleConv(in_channels, n_chans))
+#             in_channels = n_chans  # after each convolution we set (next) in_channel to (previous) out_channels 
+            
+#         for n_chans in reversed(hidden_channels):
+#             self.ups.append(nn.ConvTranspose2d(n_chans*2, n_chans, kernel_size=2, stride=2,))
+#             self.ups.append(DoubleConv(n_chans*2, n_chans))
+            
+#         self.bottleneck = DoubleConv(hidden_channels[-1], hidden_channels[-1]*2)
+#         self.final_conv = nn.Conv2d(hidden_channels[0], len_set, kernel_size=1)
+    
+
+#     def forward(self, x): 
+        
+#         x = x.to(torch.float32)
+
+#         # Perform downs
+#         skip_connections = []
+#         for down in self.downs:
+#             x = down(x)
+#             skip_connections.append(x) 
+#             x = self.pool(x)
+#         x = self.bottleneck(x)
+        
+#         # Reverse skip connections
+#         skip_connections = skip_connections[::-1] # reverse 
+        
+#         # Perform ups
+#         for idx in range(0, len(self.ups), 2): # step of 2 becasue add conv step
+#             x = self.ups[idx](x)
+#             skip_connection = skip_connections[idx//2]
+#             if x.shape != skip_connection.shape:
+#                 x = TF.resize(x, size=skip_connection.shape[2:], antialias=None)
+#             concat_skip = torch.cat((skip_connection, x), dim=1)
+#             x = self.ups[idx+1](concat_skip)
+
+#         return self.final_conv(x)
+
+
 class UNet(nn.Module):
     '''
     UNet for [N_img, N_pix, N_pix] -> [N_img, N_pix, N_pix] 
     '''
     
-    def __init__(self, len_set, hidden_channels=[64, 128, 256, 512],): # len_set, k_size=3, padding_mode='zeros', hidden_channels=[16, 64])
+    def __init__(self, len_set, hidden_channels=[64, 128, 256, 512], convblock_depth=2): # len_set, k_size=3, padding_mode='zeros', hidden_channels=[16, 64])
         
         super(UNet, self).__init__() 
         
@@ -121,12 +174,18 @@ class UNet(nn.Module):
         
         in_channels = len_set
         for n_chans in hidden_channels:
-            self.downs.append(DoubleConv(in_channels, n_chans))
+            if convblock_depth == 2: # for backwards compatability
+                self.downs.append(DoubleConv(in_channels, n_chans))
+            else:
+                self.downs.append(MultiConv(in_channels, n_chans, convblock_depth))
             in_channels = n_chans  # after each convolution we set (next) in_channel to (previous) out_channels 
             
         for n_chans in reversed(hidden_channels):
             self.ups.append(nn.ConvTranspose2d(n_chans*2, n_chans, kernel_size=2, stride=2,))
-            self.ups.append(DoubleConv(n_chans*2, n_chans))
+            if convblock_depth == 2: # for backwards compatabilty
+                self.ups.append(DoubleConv(n_chans*2, n_chans))
+            else:
+                self.ups.append(MultiConv(n_chans*2, n_chans, convblock_depth))
             
         self.bottleneck = DoubleConv(hidden_channels[-1], hidden_channels[-1]*2)
         self.final_conv = nn.Conv2d(hidden_channels[0], len_set, kernel_size=1)
@@ -135,14 +194,18 @@ class UNet(nn.Module):
     def forward(self, x): 
         
         x = x.to(torch.float32)
+        #print('input', x.shape)
 
         # Perform downs
         skip_connections = []
         for down in self.downs:
             x = down(x)
+            #print('after down', x.shape)
             skip_connections.append(x) 
             x = self.pool(x)
+            #print('after pool', x.shape)
         x = self.bottleneck(x)
+        #print('after bottleneck', x.shape)
         
         # Reverse skip connections
         skip_connections = skip_connections[::-1] # reverse 
@@ -150,11 +213,14 @@ class UNet(nn.Module):
         # Perform ups
         for idx in range(0, len(self.ups), 2): # step of 2 becasue add conv step
             x = self.ups[idx](x)
+            #print('after up', x.shape)
             skip_connection = skip_connections[idx//2]
             if x.shape != skip_connection.shape:
                 x = TF.resize(x, size=skip_connection.shape[2:], antialias=None)
             concat_skip = torch.cat((skip_connection, x), dim=1)
+            #print('after skip add', concat_skip.shape)
             x = self.ups[idx+1](concat_skip)
+            #print('after up', x.shape)
 
         return self.final_conv(x)
     
@@ -176,6 +242,30 @@ class DoubleConv(nn.Module):
 
     def forward(self, x):
         return self.conv(x)
+    
+    
+class MultiConv(nn.Module):
+    '''
+    Containor for conv sets (for convenience)
+    '''
+    def __init__(self, in_channels, out_channels, convblock_depth):
+
+        super(MultiConv, self).__init__()
+        self.convs = nn.ModuleList()
+        self.convs.append(nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding='same', bias=False))
+        self.convs.append(nn.BatchNorm2d(out_channels))
+        self.convs.append(nn.ReLU(inplace=True))
+        for i in range(convblock_depth-1):
+            self.convs.append(nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding='same', bias=False))
+            self.convs.append(nn.BatchNorm2d(out_channels))
+            self.convs.append(nn.ReLU(inplace=True))
+
+    def forward(self, x):
+        
+        for conv in self.convs:
+            x = conv(x)
+        
+        return x
 
 
     
