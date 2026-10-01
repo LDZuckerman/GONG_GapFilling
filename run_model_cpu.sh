@@ -13,8 +13,8 @@
 # Normal mode
 #SBATCH --time=24:00:00 # 4:00:00
 #SBATCH --ntasks=20           # number of nodes to request  
-#SBATCH --partition=amilan  # amilan for cpu, aa100 for gpu
-#SBATCH --qos=normal
+#SBATCH --partition=acpu  # amilan for cpu, aa100 for gpu
+#SBATCH --qos=cpu-normal
 
 gpu=False
 
@@ -24,15 +24,18 @@ module load miniforge # module load mambaforge/23.1.0-1
 conda activate pytorch241_rocm61_new #mamba activate pytorch241_rocm61
 export PYTHONNOUSERSITE=1
 
-while getopts "f:" flag; do
+while getopts "f:c:" flag; do
  case $flag in
-   f) expfile=$OPTARG;
+   f) expfile=$OPTARG;;
+   c) continue_train=$OPTARG;;
  esac
 done
 
-echo "Running experiment with expfile $expfile and gpu=$gpu " 
-python run_model.py -gpu $gpu -f $expfile
+echo "Running experiment with expfile $expfile and gpu=$gpu (continue_train=$continue_train)" 
+python run_model.py -gpu $gpu -f $expfile -continue_train $continue_train
 
 #####
-# run from ../ with 'sbatch run_model_cpu.sh -f exp_todo/exp_file_WNet.json'
+# sbatch run_model_cpu.sh -f exp_todo/exp_file_UNet_0.json -c False
+# sbatch run_model_cpu.sh -f ../model_runs/UNet46/exp_file.json -c False
+# sbatch run_model_cpu.sh -f ../model_runs/UNet42/exp_file.json -c 10
 ######

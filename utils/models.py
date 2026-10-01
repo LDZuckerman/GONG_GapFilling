@@ -159,18 +159,20 @@ class SimpleRNN(nn.Module):
 #         return self.final_conv(x)
 
 
-class UNet(nn.Module):
+class UNet_n(nn.Module):
     '''
     UNet for [N_img, N_pix, N_pix] -> [N_img, N_pix, N_pix] 
     '''
     
-    def __init__(self, len_set, hidden_channels=[64, 128, 256, 512], convblock_depth=2): # len_set, k_size=3, padding_mode='zeros', hidden_channels=[16, 64])
+    def __init__(self, len_set, hidden_channels=[64, 128, 256, 512], convblock_depth=2, only_centers=False, only_outers=False): # len_set, k_size=3, padding_mode='zeros', hidden_channels=[16, 64])
         
-        super(UNet, self).__init__() 
+        super(UNet_n, self).__init__() 
         
         self.ups = nn.ModuleList() 
         self.downs = nn.ModuleList()
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2) 
+        self.only_centers = only_centers
+        self.only_outers = only_outers
         
         in_channels = len_set
         for n_chans in hidden_channels:
@@ -221,6 +223,20 @@ class UNet(nn.Module):
             #print('after skip add', concat_skip.shape)
             x = self.ups[idx+1](concat_skip)
             #print('after up', x.shape)
+            
+        # If desired, force outer or inner regions to be zeros
+        if self.only_centers or self.only_centers:
+            n_pix = x.shape[2]
+            xx, yy = np.meshgrid(np.linspace(0, n_pix-1, n_pix), np.linspace(0, n_pix-1, n_pix), indexing='ij')
+            ctr_x, ctr_y = n_pix/2, n_pix/2
+            r = np.sqrt(((xx-ctr_x)**2 + (yy-ctr_y)**2))
+            mask = torch.zeros_like(x, dtype=torch.bool) 
+            if self.only_centers:
+                use_idxs = np.where(r < 33)
+            if self.only_outers:
+                use_idxs = np.where(r > 27)               
+            mask[:, :, torch.from_numpy(use_idxs[0]), torch.from_numpy(use_idxs[1])] = True
+            x = torch.where(mask, x, 0)
 
         return self.final_conv(x)
     

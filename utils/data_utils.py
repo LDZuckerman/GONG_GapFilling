@@ -14,11 +14,13 @@ import scipy.stats as stats
 import torch
 import torchvision.transforms as transforms
 import scipy.ndimage as sndi
+from scipy import ndimage
 from torch.utils.data import Dataset
 import pickle
 import tarfile
 import glob
 from scipy.fft import fftn, fftfreq, ifft, ifftn
+from scipy.interpolate import interp1d
 
 
 ###############
@@ -32,16 +34,24 @@ class dataset(Dataset):
     def __init__(self, set, dataset, dpath='../Data', norm='image', channels=['X'], n_classes=2, im_size=None, subset_frac=None, freq_filter=False):
         self.dpath = dpath
         self.dataset = dataset
+        self.set = set
+        self.shortts = True if 'shortTS' in dataset else False
         if '$' not in dataset:
-            all_x_sets = [f for f in np.sort(os.listdir(f'{dpath}/{dataset}')) if '_true' not in f and f != 'test_tags.npy'] 
-            all_y_sets = [f for f in np.sort(os.listdir(f'{dpath}/{dataset}')) if '_true' in f and f != 'test_tags.npy']
+            shortts_str = '_shortts' if self.shortts else ''
+            all_x_sets = [f for f in np.sort(os.listdir(f'{dpath}/{dataset}')) if f'_x{shortts_str}' in f and f != 'test_tags.npy'] 
+            all_y_sets = [f for f in np.sort(os.listdir(f'{dpath}/{dataset}')) if f'_true{shortts_str}' in f and f != 'test_tags.npy']  
             test_tags = np.load(f'{self.dpath}/{self.dataset}/test_tags.npy')
-            if set == 'train':
+            if self.set == 'train':
                 self.x_sets = [f'{dataset}/{all_x_sets[i]}' for i in range(len(all_x_sets)) if all_x_sets[i].replace('_x.npy', '') not in test_tags]
                 self.y_sets = [f'{dataset}/{all_y_sets[i]}' for i in range(len(all_y_sets)) if all_y_sets[i].replace('_true.npy', '') not in test_tags]
-            elif set == 'val' or set == 'test':
-                self.x_sets = [f'{dataset}/{all_x_sets[i]}' for i in range(len(all_x_sets)) if all_x_sets[i].replace('_x.npy', '') in test_tags]
-                self.y_sets = [f'{dataset}/{all_y_sets[i]}' for i in range(len(all_y_sets)) if all_y_sets[i].replace('_true.npy', '') in test_tags]
+            elif self.set in ['val','test']:
+                self.x_sets = [f'{dataset}/{all_x_sets[i]}' for i in range(len(all_x_sets)) if all_x_sets[i].replace(f'_x{shortts_str}.npy', '') in test_tags]
+                self.y_sets = [f'{dataset}/{all_y_sets[i]}' for i in range(len(all_y_sets)) if all_y_sets[i].replace(f'_true{shortts_str}.npy', '') in test_tags]
+                if self.shortts:
+                    self.x_sets_og = [f.replace('_shortts', '') for f in self.x_sets]
+                    self.y_sets_og = [f.replace('_shortts', '') for f in self.y_sets]
+                    self.x_sets_longts = [f.replace('_x', '_x_longts') for f in self.x_sets_og]
+                    self.y_sets_longts = [f.replace('_true', '_true_longts') for f in self.y_sets_og]                  
         else:
             self.x_sets = []
             self.y_sets = [] 
@@ -53,7 +63,7 @@ class dataset(Dataset):
                 if set == 'train':
                     x_sets_ds = [f'{ds}/{all_x_sets_ds[i]}' for i in range(len(all_x_sets_ds)) if all_x_sets_ds[i].replace('_x.npy', '') not in test_tags_ds]
                     y_sets_ds = [f'{ds}/{all_y_sets_ds[i]}' for i in range(len(all_y_sets_ds)) if all_y_sets_ds[i].replace('_true.npy', '') not in test_tags_ds]
-                elif set == 'val' or set == 'test':
+                elif set in ['val','test']:
                     x_sets_ds= [f'{ds}/{all_x_sets_ds[i]}' for i in range(len(all_x_sets_ds)) if all_x_sets_ds[i].replace('_x.npy', '') in test_tags_ds]
                     y_sets_ds = [f'{ds}/{all_y_sets_ds[i]}' for i in range(len(all_y_sets_ds)) if all_y_sets_ds[i].replace('_true.npy', '') in test_tags_ds]
                 self.x_sets.extend(x_sets_ds)
@@ -97,7 +107,55 @@ class dataset(Dataset):
             true = frequency_filter(true, f_low_mHz=2.5, f_high_mHz=4.5)
         if self.norm == 'image':
             true = (true - np.min(true)) / (np.max(true) - np.min(true))
-        return x, true
+            
+        # If short-timescale ony, get long-timescale and fulls
+        if self.shortts and self.set in ['test', 'val']:
+            
+            # Get full x
+            x_og_path = os.path.join(self.dpath, self.x_sets_og[index]) 
+            x_og = np.load(x_og_path)
+            if self.im_size != None: 
+                x_og = np.array(self.resize(torch.from_numpy(np.expand_dims(x_og, axis=0)))).squeeze()
+            if self.freq_filter:
+                x_og = frequency_filter(x_og, f_low_mHz=2.5, f_high_mHz=4.5)
+            if self.norm == 'image':
+                x_og = (x_og - np.min(x_og)) / (np.max(x_og) - np.min(x_og))
+            
+            # Get full y
+            y_og_path = os.path.join(self.dpath, self.y_sets_og[index]) 
+            true_og = np.load(y_og_path)
+            if self.im_size != None: 
+                true_og = np.array(self.resize(torch.from_numpy(np.expand_dims(true_og, axis=0)))).squeeze()
+            if self.freq_filter:
+                true_og = frequency_filter(true_og, f_low_mHz=2.5, f_high_mHz=4.5)
+            if self.norm == 'image':
+                true_og = (true_og - np.min(true_og)) / (np.max(true_og) - np.min(true_og))
+                
+            # Get long-ts x
+            x_longts_path = os.path.join(self.dpath, self.x_sets_longts[index]) 
+            x_longts = np.load(x_longts_path)
+            if self.im_size != None: 
+                x_longts = np.array(self.resize(torch.from_numpy(np.expand_dims(x_longts, axis=0)))).squeeze()
+            if self.freq_filter:
+                x_longts = frequency_filter(x_longts, f_low_mHz=2.5, f_high_mHz=4.5)
+            if self.norm == 'image':
+                x_longts = (x_longts - np.min(x_longts)) / (np.max(x_longts) - np.min(x_longts))
+            
+            # Get full y
+            y_longts_path = os.path.join(self.dpath, self.y_sets_longts[index]) 
+            true_longts = np.load(y_longts_path)
+            if self.im_size != None: 
+                true_longts = np.array(self.resize(torch.from_numpy(np.expand_dims(true_longts, axis=0)))).squeeze()
+            if self.freq_filter:
+                true_longts = frequency_filter(true_longts, f_low_mHz=2.5, f_high_mHz=4.5)
+            if self.norm == 'image':
+                true_longts = (true_longts - np.min(true_longts)) / (np.max(true_longts) - np.min(true_longts))
+              
+        # Return    
+        if self.shortts and self.set in ['test', 'val']:
+            return x, true, x_og, true_og, x_longts, true_longts
+        else:
+            return x, true
     
     
 class pixel_dataset(Dataset):
@@ -220,7 +278,7 @@ def save_missing_filenames(data_subset, dpath='../Data'):
 
             
 
-def create_dataset(from_set, from_tag, set_length, num_missing, sample_method, redo=False, dpath='..Data', fourier_filter=False, multi_gap_lengths=False, shortts=False):
+def create_dataset(from_set, from_tag, set_length, num_missing, sample_method, redo=False, dpath='..Data', fourier_filter=False, shortts=False):
     '''
     Create new dataset with image sets of given length, masking images from inputs as prescribed
     Parameters:
@@ -235,7 +293,10 @@ def create_dataset(from_set, from_tag, set_length, num_missing, sample_method, r
     #######################################################
     
     from_dir = f'{dpath}/Originals/{from_set}'
-    shorts_tag = 'shortTS' if shortts else ''
+    shortts_tag = '_shortTS' if shortts else ''
+    print(f'shortts_tag = {shortts_tag}')
+    multi_gap_lengths=False if 'multi' not in sample_method else True
+    year = from_set[7:12]
     if not multi_gap_lengths:
         new_name = f'NN_Data_{year}_{set_length}_{num_missing}_{sample_method}{shortts_tag}'
     else:
@@ -323,9 +384,9 @@ def create_dataset(from_set, from_tag, set_length, num_missing, sample_method, r
     # If creating set with short-timescale-only inputs, save those
     ##############################################################
     
-    if shortts:
+    if shortts: 
         print(f'Saving short-timescale-only versions of the trues and inputs')
-        save_short_long_timescale_sets(new_dir, dpath=dpath)
+        save_short_long_TS_sets(new_dir, dpath=dpath)
     
     ######################
     # Create test tag list
@@ -333,7 +394,7 @@ def create_dataset(from_set, from_tag, set_length, num_missing, sample_method, r
     
     print('Saving test set tags')
     test_tags = []
-    all_tags = np.sort([f.replace('_x.npy', '')  for f in os.listdir(new_dir) if '_x' in f])
+    all_tags = np.sort([f.replace('_x.npy', '')  for f in os.listdir(new_dir) if '_x.npy' in f])
     n_test = int(len(all_tags)*0.2)
     test_tags = np.random.choice(all_tags, n_test, replace=False)
     np.save(f'{new_dir}/test_tags.npy', test_tags)
@@ -483,6 +544,8 @@ def save_input_sets(new_dir, num_missing, sample_method, set_length, dpath, shor
                     missing_idxs = missing_idxs + use_idxs
                     for x in use_idxs:
                         avail_idxs.remove(x)
+        else:
+            raise ValueError(f'Sample method {sample_method} not recognized')
 
         # Create input that is copy of true but with blanks at desired missing idxs
         input_set = np.copy(true_set)   
@@ -518,46 +581,46 @@ def save_short_long_TS_sets(new_dir, dpath):
 
         # Get smoothed 
         gong_seq_filled_smooth = gong_seq_filled_linear.copy()
-        true_set_longts = ndimage.gaussian_filter1d(gong_seq_filled_linear, sigma=9, axis=0, mode='reflect')
+        true_set_longts = ndimage.gaussian_filter1d(gong_seq_filled_linear, sigma=9, axis=2, mode='reflect')
 
         # Get smoothed removed
         true_set_shortts = true_set - true_set_longts
 
-        # Put (unexpected) gaps back in 
+        # Put (unexpected) gaps back in to the shortts (not the longts)
         true_set_shortts[gap_idxs,:,:] = 0.0
         
         # Save
-        np.save(f'{new_dir}/{true_set_file}_shortts', true_set_shortts)
-        np.save(f'{new_dir}/{true_set_file}_longts', true_set_longts)
+        np.save(f'{new_dir}/{true_set_file.replace(".npy","_shortts.npy")}', true_set_shortts)
+        np.save(f'{new_dir}/{true_set_file.replace(".npy","_longts.npy")}', true_set_longts)
         
     # Loop over each input set
     inps = np.sort([f for f in os.listdir(f'{new_dir}') if 'x.npy' in f])
-    for inp_set_file in trues:
+    for inp_set_file in inps:
         
         # Load
         inp_set = np.load(f'{new_dir}/{inp_set_file}')
     
-        # Since even these "100%" DC sets aren't truely 100%, use LI to fill 
-        gap_idxs = np.where(np.sum(true_set, axis=(1,2))==0)[0]
-        valid_idxs = np.where(np.sum(true_set, axis=(1,2))!=0)[0]
-        gong_seq_filled_linear = true_set.copy()
-        lin_interp = interp1d(valid_idxs, true_set[valid_idxs,:,:] , axis=0, kind='linear',fill_value="extrapolate") # Add fill_value="extrapolate" so that it can predict gap idxs outside of valid idxs (e.g. if there is a missing img at the start or end of the day)
+        # Use LI to fill gaps
+        gap_idxs = np.where(np.sum(inp_set, axis=(1,2))==0)[0]
+        valid_idxs = np.where(np.sum(inp_set, axis=(1,2))!=0)[0]
+        gong_seq_filled_linear = inp_set.copy()
+        lin_interp = interp1d(valid_idxs, inp_set[valid_idxs,:,:] , axis=0, kind='linear',fill_value="extrapolate") # Add fill_value="extrapolate" so that it can predict gap idxs outside of valid idxs (e.g. if there is a missing img at the start or end of the day)
         interpolated_slice = lin_interp(gap_idxs)
         gong_seq_filled_linear[gap_idxs,:,:] = interpolated_slice
 
         # Get smoothed 
         gong_seq_filled_smooth = gong_seq_filled_linear.copy()
-        true_set_longts = ndimage.gaussian_filter1d(gong_seq_filled_linear, sigma=9, axis=0, mode='reflect')
+        inp_set_longts = ndimage.gaussian_filter1d(gong_seq_filled_linear, sigma=9, axis=0, mode='reflect')
 
         # Get smoothed removed
-        true_set_shortts = true_set - true_set_longts
+        inp_set_shortts = inp_set - inp_set_longts
 
-        # Put (unexpected) gaps back in 
-        true_set_shortts[gap_idxs,:,:] = 0.0
+        # Put (unexpected) gaps back in to the shortts (not the longts)
+        inp_set_shortts[gap_idxs,:,:] = 0.0
         
         # Save
-        np.save(f'{new_dir}/{true_set_file}_shortts', true_set_shortts)
-        np.save(f'{new_dir}/{true_set_file}_longts', true_set_longts)
+        np.save(f'{new_dir}/{inp_set_file.replace(".npy","_shortts.npy")}', inp_set_shortts)
+        np.save(f'{new_dir}/{inp_set_file.replace(".npy","_longts.npy")}', inp_set_longts)
         
                 
 def assign_gap_lens(num_missing):
@@ -614,6 +677,8 @@ def check_inputs(train_ds, train_loader, savefig=False, name=None):
     '''
     Check data is loaded correctly
     '''
+    
+    # Examine train data
     print('Train data:')
     print(f'\t{len(train_ds)} obs, broken into {len(train_loader)} batches')
     train_input, train_labels = next(iter(train_loader)) 
@@ -622,8 +687,12 @@ def check_inputs(train_ds, train_loader, savefig=False, name=None):
     in_layers = in_shape[1]
     N1 = in_shape[2]; N2 = in_shape[3]
     print(f'\tEach batch has data of shape {train_input.size()}, e.g. {in_shape[0]} images, {[N1, N2]} pixels each, {in_layers} layers (features)')
+    #print(f'\tInput values have range ({min(train_input)}, {max(train_input)})')
     
-
+    # Check gaps
+    
+    
+    # Plot fig if desired
     if savefig:
         n_col = in_layers #+ out_layers
         N = 20

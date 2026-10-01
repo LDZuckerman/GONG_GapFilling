@@ -13,25 +13,50 @@ sys.path.append('/pl/active/NSO-IT/data/leah/Solar_GapFilling/GONG_GapFilling/')
 from utils import eval_utils
 
 
-def plot_preds_one_model_single(model_name, model_desc, output_dir, example_idx=0, cbar=False, show_diff=True, show_LI=True, add_back_long=True): # rescale=False
+def read_in_files(output_dir, model_name, example_idx, add_back_long, scale_preds):
+    '''
+    Helper function to get inputs, preds, and trues
+    '''
+    
+    # Get validation trues, preds, and input for given model at example idx
+    shortts = 'True' if 'shortTS' in json.load(open(f'{output_dir}/{model_name}/exp_file.json'))['dataset'] else False
+    shortts_str = '_shortts' if shortts else ''
+    preds_dir = f'{output_dir}/{model_name}/test_preds_scale'
+    true = np.load(f'{preds_dir}/true{shortts_str}_{example_idx}.npy')
+    pred = np.load(f'{preds_dir}/pred{shortts_str}_{example_idx}.npy')
+    inp = np.load(f'{preds_dir}/x{shortts_str}_{example_idx}.npy')
+    t = pickle.load(open(f'{preds_dir}/starttimes.pkl','rb'))[example_idx]
+    s = f'{t[7:9]}:{t[9:11]} on {t[2:4]}/{t[4:6]}/20{t[0:2]}'
+    
+    # If desired, add back long-timescale oscilations for for short-timescale-only models
+    if shortts and add_back_long:
+        true = np.load(f'{preds_dir}/true_{example_idx}.npy') # use full true
+        inp_long = np.load(f'{preds_dir}/true_longts_{example_idx}.npy')
+        pred = pred + inp_long # reconstruct full pred by adding back in LI-predicted long-TS trends  
+        
+    # If desired, scale preds to the same range as inputs
+    if scale_preds:
+        nongap_idxs = np.where(np.sum(inp, axis=(1,2)) != 0)[0]
+        inp_nongap = inp[nongap_idxs]
+        inp_min = np.min(inp_nongap, axis=0)
+        inp_max = np.max(inp_nongap, axis=0)
+        gap_idxs = np.where(np.sum(inp, axis=(1,2)) == 0)[0]
+        pred_gap = pred[gap_idxs]
+        pred_min = np.min(pred_gap, axis=0)
+        pred_max = np.max(pred_gap, axis=0)
+        pred_scale =  inp_min + (pred - pred_min) * (inp_max -  inp_min) / (pred_max - pred_min)
+        pred = pred_scale
+        
+    return inp, true, pred, s
+
+
+def plot_preds_one_model_single(model_name, model_desc, output_dir, example_idx=0, cbar=False, show_diff=True, show_LI=True, add_back_long=True, scale_preds=False): # rescale=False
     '''
     Plot model predictions along with inputs and truth for one example image set from the validation data
     '''
     
-    # Get validation trues, preds, and input for given model at example idx
-    preds_dir = f'{output_dir}/{model_name}/test_preds_scale'
-    true = np.load(f'{preds_dir}/true_{example_idx}.npy')
-    pred = np.load(f'{preds_dir}/pred_{example_idx}.npy')
-    inp = np.load(f'{preds_dir}/x_{example_idx}.npy')
-    t = pickle.load(open(f'{preds_dir}/starttimes.pkl','rb'))[example_idx]
-    s = f'{t[7:9]}:{t[9:11]} on {t[2:4]}/{t[4:6]}/20{t[0:2]}'
-    
-    # If short-timescale-only model and add_back_long
-    shortts = 'True' if 'shortTS' in json.load(open(f'{output_dir}/{model_name}/exp_file.json'))['dataset'] else False
-    if shortts and add_back_long:
-        true = np.load(f'{preds_dir}/true_{example_idx}.npy') # use full true
-        inp_long = np.load(f'{preds_dir}/true_longts_{example_idx}.npy')
-        pred = pred + inp_long # reconstruct full pred by adding back in LI-predicted long-TS trends
+    # Get input, true, and pred
+    inp, true, pred, s = read_in_files(output_dir, model_name, example_idx, add_back_long, scale_preds)
     
     # If desired, get linear interpolation predictions for comparison
     if show_LI:
@@ -206,23 +231,13 @@ def plot_preds_multi_models(model_names, output_dir='../../model_runs/',  exampl
     return fig
 
 
-def plot_predvtrue(model_name, model_desc, output_dir='../../model_runs/',  example_idx=0, r_ranges=None, colorby=None, add_back_long=True, breakout_by_r=False): # rescale=True
+def plot_predvtrue(model_name, model_desc, output_dir='../../model_runs/',  example_idx=0, r_ranges=None, colorby=None, add_back_long=True, breakout_by_r=False, scale_preds=False): # rescale=True
     '''
     Plot pred val as a func of true (using only the missing idxs)
     '''
     
-    # Get validation trues, preds, and input for given model at example idx
-    preds_dir = f'{output_dir}/{model_name}/test_preds_scale'
-    true = np.load(f'{preds_dir}/true_{example_idx}.npy')
-    pred = np.load(f'{preds_dir}/pred_{example_idx}.npy')
-    inp = np.load(f'{preds_dir}/x_{example_idx}.npy')
-    
-    # If short-timescale-only model and add_back_long
-    shortts = 'True' if 'shortTS' in json.load(open(f'{output_dir}/{model_name}/exp_file.json'))['dataset'] else False
-    if shortts and add_back_long:
-        true = np.load(f'{preds_dir}/true_{example_idx}.npy') # use full true
-        inp_long = np.load(f'{preds_dir}/true_longts_{example_idx}.npy')
-        pred = pred + inp_long # reconstruct full pred by adding back in LI-predicted long-TS trends
+    # Get input, true, and pred
+    inp, true, pred, s = read_in_files(output_dir, model_name, example_idx, add_back_long, scale_preds)
     
     # # Re-scale if desired
     # if rescale:
@@ -607,19 +622,26 @@ def plot_resids_hist(model_name, model_desc, output_dir, example_idx=0):
     return fig
 
 
-def plot_pix_signal(model_name, model_desc, output_dir, example_idx=0, add_back_long=True, pix_idx=(50,50)):
+def plot_pix_signal(model_name, model_desc, output_dir, example_idx=0, add_back_long=True, pix_idx=(50,50), scale_preds=False):
 
-    # Get validation trues, preds, and input for given model at example idx
-    preds_dir = f'{output_dir}/{model_name}/test_preds_scale'
-    true = np.load(f'{preds_dir}/true_{example_idx}.npy')
-    pred = np.load(f'{preds_dir}/pred_{example_idx}.npy')
-    inp = np.load(f'{preds_dir}/x_{example_idx}.npy')
+    # # Get validation trues, preds, and input for given model at example idx
+    # shortts = 'True' if 'shortTS' in json.load(open(f'{output_dir}/{model_name}/exp_file.json'))['dataset'] else False
+    # shortts_str = '_shortts' if shortts else ''
+    # preds_dir = f'{output_dir}/{model_name}/test_preds_scale'
+    # true = np.load(f'{preds_dir}/true{shortts_str}_{example_idx}.npy')
+    # pred = np.load(f'{preds_dir}/pred{shortts_str}_{example_idx}.npy')
+    # inp = np.load(f'{preds_dir}/x{shortts_str}_{example_idx}.npy')
+    # t = pickle.load(open(f'{preds_dir}/starttimes.pkl','rb'))[example_idx]
+    # s = f'{t[7:9]}:{t[9:11]} on {t[2:4]}/{t[4:6]}/20{t[0:2]}'
+    
+    # Get input, true, and pred
+    inp, true, pred, s = read_in_files(output_dir, model_name, example_idx, add_back_long, scale_preds)
     
     # If short-timescale-only model and add_back_long
     shortts = 'True' if 'shortTS' in json.load(open(f'{output_dir}/{model_name}/exp_file.json'))['dataset'] else False
     if shortts and add_back_long:
-        true = np.load(f'{preds_dir}/true_{example_idx}.npy') # use full true
-        inp_long = np.load(f'{preds_dir}/true_longts_{example_idx}.npy')
+        true = np.load(f'{output_dir}/{model_name}/test_preds_scale/true_{example_idx}.npy') # use full true
+        inp_long = np.load(f'{output_dir}/{model_name}/test_preds_scale/true_longts_{example_idx}.npy')
         pred = pred + inp_long # reconstruct full pred by adding back in LI-predicted long-TS trends
     
     # Get LI 
@@ -629,7 +651,7 @@ def plot_pix_signal(model_name, model_desc, output_dir, example_idx=0, add_back_
         eval_utils.save_li_filled_set(dataset)
     li_pred = np.load(f'{li_preds_dir}/pred_{example_idx}.npy')
     
-    # Plot
+    # Plot full signal
     fig = get_pix_signal_plot(true, pred, li_pred, pix_idx, only_gap_pred=True, inp=inp)
     fig.suptitle(f'Signal for Pixel ({pix_idx[0]}, {pix_idx[1]}) of Example Set {example_idx} as Predicted by {model_name}')
     
@@ -641,7 +663,8 @@ def get_pix_signal_plot(true, pred, li_pred, pix_idx, only_gap_pred=True, inp=No
     # Get true, pred, and LI signals
     true_signal = true[:,pix_idx[0], pix_idx[1]]
     pred_signal = pred[:,pix_idx[0], pix_idx[1]]
-    li_signal = li_pred[:,pix_idx[0], pix_idx[1]]
+    if not isinstance(li_pred, type(None)):
+        li_signal = li_pred[:,pix_idx[0], pix_idx[1]]
     
     # Set predicted signal to true outside of gap region
     if only_gap_pred:
@@ -653,15 +676,19 @@ def get_pix_signal_plot(true, pred, li_pred, pix_idx, only_gap_pred=True, inp=No
     if len(true_signal) > 1000:
         figsize = (200, 7)
         lw = 0.5
-        ax.set_xlim(0,1440)
+        xlim = (0, 1440)
         alpha = 1
     else:
         figsize = (10, 3)
         lw = 1
         alpha = 0.7
+        xlim = (0, len(pred))
     fig, ax = plt.subplots(1, 1, figsize=figsize)
+    ax.set_xlim(xlim[0],xlim[1])
     ax.plot(pred_signal, alpha=alpha, linewidth=lw, label='Model Prediction')
-    ax.plot(li_signal, alpha=alpha, linewidth=lw, linestyle='--', label='Linear Interpolation')
+    #if not li_pred == None:
+    if not isinstance(li_pred, type(None)):
+        ax.plot(li_signal, alpha=alpha, linewidth=lw, linestyle='--', label='Linear Interpolation')
     ax.plot(true_signal, alpha=alpha, linewidth=lw, label='True')
     ax.legend()
     ax.set_ylabel('Velocity (m/s)')
@@ -669,29 +696,19 @@ def get_pix_signal_plot(true, pred, li_pred, pix_idx, only_gap_pred=True, inp=No
     return fig
 
 
-def plot_vt_slice(model_name, model_desc, output_dir, example_idx, slice_x=50, add_back_long=True):
+def plot_vt_slice(model_name, model_desc, output_dir, example_idx, slice_x=50, add_back_long=True, scale_preds=False):
     
-    # Get validation trues, preds, and input for given model at example idx
-    preds_dir = f'{output_dir}/{model_name}/test_preds_scale'
-    true = np.load(f'{preds_dir}/true_{example_idx}.npy')
-    pred = np.load(f'{preds_dir}/pred_{example_idx}.npy')
-    inp = np.load(f'{preds_dir}/x_{example_idx}.npy')
-    
-    # If short-timescale-only model and add_back_long
-    shortts = 'True' if 'shortTS' in json.load(open(f'{output_dir}/{model_name}/exp_file.json'))['dataset'] else False
-    if shortts and add_back_long:
-        true = np.load(f'{preds_dir}/true_{example_idx}.npy') # use full true
-        inp_long = np.load(f'{preds_dir}/true_longts_{example_idx}.npy')
-        pred = pred + inp_long # reconstruct full pred by adding back in LI-predicted long-TS trends 
+    # Get input, true, and pred
+    inp, true, pred, s = read_in_files(output_dir, model_name, example_idx, add_back_long, scale_preds)
         
     # Plot
-    fig = get_vt_slice_plot(true, pred, inp)
-    plt.suptitle(f'Temporal Slice at x={slice_x} for {model_desc}', fontsize=10, y=0.9)
+    fig = get_vt_slice_plot(true, pred, inp, slice_x)
+    plt.suptitle(f'Temporal Slice at x={slice_x} for {model_desc}', fontsize=10, y=0.92)
     
     return fig 
 
 
-def get_vt_slice_plot(true, pred, inp):
+def get_vt_slice_plot(true, pred, inp, slice_x, add_diff=False):
     
     # Get true and pred slices
     true_slice = true[:,slice_x,:]
@@ -700,28 +717,48 @@ def get_vt_slice_plot(true, pred, inp):
     # Set predicted signal to true outside of gap region
     pred_slice = np.where(np.sum(inp, axis=1)==0, pred_slice, true_slice)
     
+    # Transpose axes for plotting
+    true_slice = np.transpose(true_slice, axes=(1, 0))
+    pred_slice = np.transpose(pred_slice, axes=(1, 0))
+    
     # Create plot
-    if len(true_signal) > 1000:
-        figsize = (200, 7)
+    n_rows = 3 if add_diff else 2
+    if len(true_slice) > 1000:
+        figsize = (n_rows*350, 12)
     else:
-        figsize = (10, 3)
-    fig, axs = plt.subplots(2, 1, figsize=figsize, sharex=True)
-    im0 = axs[0].imshow(true_slice, vmin=np.min(true_slice), vmax=np.max(true_slice))
+        figsize = (n_rows*5, 6)
+    fig, axs = plt.subplots(n_rows, 1, figsize=figsize, sharex=True)
+    im0 = axs[0].imshow(true_slice, vmin=np.min(true_slice), vmax=np.max(true_slice), aspect='auto')
     axs[0].set_ylabel('True'); plt.colorbar(im0, ax=axs[0], pad=0.01, label='Velocity (m/s)')
-    im1 = axs[1].imshow(pred_slice, vmin=np.min(true_slice), vmax=np.max(true_slice))
+    axs[0].set_yticks([])
+    im1 = axs[1].imshow(pred_slice, vmin=np.min(true_slice), vmax=np.max(true_slice), aspect='auto')
     axs[1].set_ylabel('Predicted'); plt.colorbar(im1, ax=axs[1], pad=0.01, label='Velocity (m/s)')
+    axs[1].set_yticks([])
     axs[1].set_xlabel('Time (minutes)')
-    plt.subplots_adjust(hspace=0.001)
+    plt.subplots_adjust(hspace=0.01)
+    
+    # Add row for diff if required
+    if add_diff:
+        im2 = axs[2].imshow(pred_slice - true_slice, vmin=np.min(true_slice), vmax=np.max(true_slice), aspect='auto')
+        axs[2].set_ylabel('Predicred - True'); plt.colorbar(im2, ax=axs[2], pad=0.01, label='Velocity (m/s)')
+        axs[2].set_yticks([])
+    
     
     return fig 
 
 
-def quick_plot_set(seq, title=''):
+def quick_plot_set(seq, title='', colorbar=True):
     
     fig, axs = plt.subplots(1, len(seq), figsize=(len(seq), 6))
     for i in range(len(seq)):
-        axs[i].imshow(seq[i])
+        im = axs[i].imshow(seq[i])
     axs[int(len(seq)/2)].set_title(title)
+    
+    if colorbar:
+        plt.colorbar(im, ax=axs[-1])
+    
+    for ax in axs.flatten():
+        ax.set_yticks([]); ax.set_xticks([])
         
     return fig   
     

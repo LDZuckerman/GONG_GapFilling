@@ -51,6 +51,10 @@ def get_modelDF(modeldir='', tag='', dtag=None, add_back_longts=True, print_skip
             val_metrics = pickle.load(open(f'{modeldir}/{expdir}/val_metrics.pkl', 'rb')) # metrics on normalized val preds
         for k in val_metrics.keys():
             exp_dict[k] = val_metrics[k]
+            
+        # Get n eopchs from looking at length of saved losses, because num_epochs in exp file won't be correct if we have added epochs
+        if 'combined' not in expdir:
+            exp_dict['num_epochs'] = int(len(np.load(f'{modeldir}/{expdir}/losses.npy')))
         
         # Add parameters that were not tunable in earlier iterations
         exp_dict['dataset'] = exp_dict['dataset'].replace('NN_Data_','')
@@ -85,6 +89,14 @@ def get_modelDF(modeldir='', tag='', dtag=None, add_back_longts=True, print_skip
     all_info = all_info.fillna('')
     
     return all_info 
+
+
+def get_curr_max_unet_name(modeldir=''):
+    
+    ignore_tags = [ 'combined', 'b','c', 'TEMP', 'ignore', 'again','+']
+    nums = [int(f.replace('UNet','').replace('n','')) for f in os.listdir(modeldir) if 'UNet' in f and not np.any([s in f for s in ignore_tags])]# 'UNet' in f and 'combined' not in f and 'b' not in f and 'TEMP' not in f and 'ignore' not in f and 'again' not in f and '+' not in f]
+
+    return max(nums)
 
 
 def compare_across_dsets(mods, datasets, modeldir='', metric='rmse', redo_metrics=False):
@@ -181,6 +193,9 @@ def prediction_validation_results(output_dir, shortts):
     '''
 
     # Get all true, pred, and input file names
+    # truefiles = [file for file in np.sort(os.listdir(output_dir)) if 'true' in file]
+    # predfiles = [file for file in np.sort(os.listdir(output_dir)) if 'pred' in file]
+    # inputfiles = [file for file in np.sort(os.listdir(output_dir)) if 'x' in file]
     shortts_str = '_shortts' if shortts else ''
     truefiles = [file for file in np.sort(os.listdir(output_dir)) if f'true{shortts_str}' in file]
     predfiles = [file for file in np.sort(os.listdir(output_dir)) if f'pred{shortts_str}' in file]
@@ -219,9 +234,9 @@ def prediction_validation_results(output_dir, shortts):
             pred = np.load(f'{output_dir}/{predfiles[i]}')
             inp = np.load(f'{output_dir}/{inputfiles[i]}')
         else:
-            true = np.load(f'{output_dir}/{truefiles[i].replace(".npy","_og.npy")}') # use the original (full) true
+            true = np.load(f'{output_dir}/{truefiles[i].replace("_shortts","")}') # use the original (full) true
             inp = np.load(f'{output_dir}/{inputfiles[i]}') # dont actually need
-            inplong = np.load(f'{output_dir}/{inputfiles[i].replace(".npy","_longts.npy")}') # get the long-ts-only input to add back to pred
+            inplong = np.load(f'{output_dir}/{inputfiles[i].replace("_shortts","_longts")}') # get the long-ts-only input to add back to pred
             pred = np.load(f'{output_dir}/{predfiles[i]}') 
             pred = pred + inplong
         
@@ -239,7 +254,9 @@ def prediction_validation_results(output_dir, shortts):
 
         # Get idxs of the gaps
         use_idxs = np.where(np.max(inp, axis=(1,2)) == np.min(inp, axis=(1,2)))[0] # WONT STILL BE ZEROS AFTER NORMLIZATION, SO JUST CHECK IF ALL THE SAME
-
+        if len(use_idxs) == 0:
+            raise ValueError(f'No missing idxs in input {i} ({inputfiles[i]})')
+        
         # Compute metrics
         smrse = 0
         sr2 = 0
@@ -336,7 +353,7 @@ def display_DF(DF, ignore_cols):
     display(DF)
     
         
-def predict_validation_day(inputs, model_name, plot_check=None, trues=None):
+def predict_validation_day(inputs, model_name, plot_check=None, trues=None, scale_preds=False, use_temp=False):
     '''
     Fill all the gaps in a given day (1440 long sequence)
     '''
@@ -353,15 +370,19 @@ def predict_validation_day(inputs, model_name, plot_check=None, trues=None):
             model = models.UNet(len_set=len_set, convblock_depth=convblock_depth)
         elif d['model_name'] == 'UNet2':
             model = models.UNet2(len_set=len_set, convblock_depth=convblock_depth)
+        elif d['model_name'] == 'UNet_n':
+            model = models.UNet_n(len_set=len_set, convblock_depth=convblock_depth)
         mod_pth = f'{exp_outdir}/{model_name}.pth' # f'{exp_outdir}/{model_name}.pth'
+        if not os.path.exists(mod_pth) and use_temp:
+            mod_pth = f'{exp_outdir}/{model_name}_temp.pth'
         model.load_state_dict(torch.load(mod_pth, map_location=torch.device('cpu'), weights_only=False))
     
     # If combining, load models and set switch radius
     else:
         
         # Load models
-        mod1 = model_name[0:6]  # UNet14UNet27combined_r30
-        mod2 = model_name[6:12]
+        mod1 = 'UNet'+model_name.split('UNet')[1]
+        mod2 = 'UNet'+model_name.split('UNet')[2][:-12]
         exp1_outdir = f'../../model_runs/{mod1}/'
         d1 = json.load(open(f'{exp1_outdir}/exp_file.json','rb'))
         len_set = int(d1['dataset'].split('_')[3])
@@ -370,6 +391,8 @@ def predict_validation_day(inputs, model_name, plot_check=None, trues=None):
             model1 = models.UNet(len_set=len_set, convblock_depth=convblock_depth)
         elif d1['model_name'] == 'UNet2':
             model1 = models.UNet2(len_set=len_set, convblock_depth=convblock_depth)
+        elif d1['model_name'] == 'UNet_n':
+            model1 = models.UNet_n(len_set=len_set, convblock_depth=convblock_depth)
         model1.load_state_dict(torch.load(f'{exp1_outdir}/{d1["name"]}.pth', map_location=torch.device('cpu'), weights_only=True))
         exp2_outdir = f'../../model_runs/{mod2}/'
         d2 = json.load(open(f'{exp2_outdir}/exp_file.json','rb'))
@@ -378,6 +401,8 @@ def predict_validation_day(inputs, model_name, plot_check=None, trues=None):
             model2 = models.UNet(len_set=len_set, convblock_depth=convblock_depth)
         elif d2['model_name'] == 'UNet2':
             model2 = models.UNet2(len_set=len_set, convblock_depth=convblock_depth)
+        elif d2['model_name'] == 'UNet_n':
+            model2 = models.UNet_n(len_set=len_set, convblock_depth=convblock_depth)
         model2.load_state_dict(torch.load(f'{exp2_outdir}/{d2["name"]}.pth', map_location=torch.device('cpu'), weights_only=True))
         
         # Compute radii
@@ -387,8 +412,10 @@ def predict_validation_day(inputs, model_name, plot_check=None, trues=None):
         ctr_x, ctr_y = n_pix/2, n_pix/2
         r = np.sqrt(((xx-ctr_x)**2 + (yy-ctr_y)**2))
 
-    # Find the locations of gaps in the input, create sets around those gaps, fill with model
+    # Initialze output
     preds = np.copy(inputs) # Could alternatively copy trues here, but they are the same at non-gap idxs
+    
+    # Find the locations of gaps in the input, create sets around those gaps
     gap_idxs = np.where(np.sum(inputs, axis=(1,2)) == 0)[0]
     diffs = np.diff(gap_idxs) # gives gap_idxs[i]-gap_idxs[i-1] for all i>0 (so length is len(gap_idxs)-1)
     split_idxs = [i+1 for i in range(len(diffs)) if diffs[i]> 1]
@@ -415,46 +442,7 @@ def predict_validation_day(inputs, model_name, plot_check=None, trues=None):
         # Deal with the case where there are gaps in the non-gap portions of the input
         # In the mock data, this would happen if the gaps are too close together
         # For now, just use LI to remove unexpected gaps. In the future, train models to work on gaps at any position. 
-        expected_nongap_idxs = [idx for idx in sec_idxs if idx not in gap_idxs]
-        sec_expected_non_gap = section[expected_nongap_idxs-sec_start] # np.delete(section, expected_gap_idxs, axis=0) # section[~expected_gap_idxs,:,:]
-        expected_filled_have_gaps = np.sum(sec_expected_non_gap, axis=(1, 2)) == 0
-        if np.any(expected_filled_have_gaps):  
-            starts = np.where(expected_filled_have_gaps, np.maximum.accumulate(np.where(expected_filled_have_gaps & ~np.concatenate(([False], expected_filled_have_gaps[:-1])), expected_nongap_idxs, -1)), np.nan)
-            ends = np.where(expected_filled_have_gaps, np.minimum.accumulate(np.where(expected_filled_have_gaps & ~np.r_[expected_filled_have_gaps[1:], False], expected_nongap_idxs, np.inf)[::-1])[::-1], np.nan)
-            starts = np.unique(starts[~np.isnan(starts)]) #+ sec_start
-            ends = np.unique(ends[~np.isnan(ends)]) #+ sec_start
-            for j in range(len(starts)):
-                true_start_idx = starts[j] # idx in the ORIGINAL 1440 seqence 
-                true_end_idx = ends[j] # idx in the ORIGINAL 1440 seqence 
-                unexp_gap_idxs = np.linspace(true_start_idx, true_end_idx, int(true_end_idx-true_start_idx)+1)
-                # Find before-gap image (if section starts with gap, must check backwards through preceeding images)
-                if true_start_idx != sec_idxs[0]:
-                    before_gap_img = inputs[int(true_start_idx-1),:,:]
-                    idx_in_gap = 0 # the first idx of the gap we see is indeed the first idx of the gap, so start at 0
-                else:
-                    before_gap_img = np.zeros((209, 209))
-                    count = 1
-                    while np.sum(before_gap_img) == 0:
-                        before_gap_img = inputs[int(true_start_idx-1-count),:,:]
-                        count += 1
-                    idx_in_gap = count # the first idx of the gap we see is NOT the first idx of the gap, so start at how far it actually is into the gap
-                # Find after-gap image (if section ends with gap, must check backwards through preceeding images)
-                if true_end_idx != sec_idxs[-1]:
-                    after_gap_img = inputs[int(true_end_idx+1),:,:]
-                else:
-                    after_gap_img = np.zeros((209, 209))
-                    count = 1
-                    while np.sum(after_gap_img) == 0:
-                        after_gap_img = inputs[int(true_end_idx+1+count),:,:]
-                        count += 1
-                # Fill unexpected gap with LI
-                filled_unexp_gap = np.empty((len(unexp_gap_idxs), 209, 209))
-                for k in range(len(unexp_gap_idxs)):
-                    weight = idx_in_gap/len(unexp_gap_idxs)
-                    interp_img = (1 - weight) * before_gap_img + weight * after_gap_img
-                    filled_unexp_gap[k] = interp_img
-                    idx_in_gap += 1 
-                section[unexp_gap_idxs.astype(int)-sec_start] = filled_unexp_gap
+        section = remove_unexpected_gaps(section, inputs, sec_idxs, sec_start, gap_idxs)
 
         # Normalize
         x = (section - np.min(section)) / (np.max(section) - np.min(section)) # normalize 
@@ -471,25 +459,192 @@ def predict_validation_day(inputs, model_name, plot_check=None, trues=None):
             y = np.where(r < r0, y2, y1) 
             y = np.where((r0-2 < r) & (r < r0+2), ((r-r0+2)/4)*y1 + (1-((r-r0+2)/4))*y2, y)
             
+        # Re-scale from raw predicton range [0,1] to actual data range
+        sec_pred = y * (np.max(section) - np.min(section)) + np.min(section) 
+        
+        # If desired, scale the preds to the same range as the rest of the input section 
+        if scale_preds:
+            sec_nongap_idxs = np.where(np.sum(section, axis=(1,2)) != 0)[0]
+            section_nongap = section[sec_nongap_idxs]
+            section_min = np.min(section_nongap, axis=0)
+            section_max = np.max(section_nongap, axis=0)
+            sec_gap_idxs = np.where(np.sum(section, axis=(1,2)) == 0)[0]
+            sec_pred_gap = sec_pred[sec_gap_idxs]
+            sec_pred_min = np.min(sec_pred_gap, axis=0)
+            sec_pred_max = np.max(sec_pred_gap, axis=0)
+            sec_pred_scale =  section_min + (sec_pred - sec_pred_min) * (section_max - section_min) / (sec_pred_max - sec_pred_min)
+            sec_pred = np.copy(sec_pred_scale)
+            
         # Put the model predictions in for the gap idxs in preds
-        sec_pred = y * (np.max(section) - np.min(section)) + np.min(section) # re-scale 
-        sec_gap_idxs = np.where(np.sum(section, axis=(1, 2)) == 0)[0] # idxs within the input section that are the gap
+        sec_gap_idxs = np.where(np.sum(section, axis=(1, 2)) == 0)[0] # idxs within the input section that are the gap (should be, e.g. 10-29 if 20-min gaps)
         preds[gap_idxs,:,:] = sec_pred[sec_gap_idxs]
 
         # Plot to check quailty 
-        fig = None
         if plot_check:
             sec_mod_trues = trues[sec_idxs,:,:]
             fig, axs = plt.subplots(2, len_set, figsize=(len_set, 2))
             for i in range(len_set):
-                im0 = axs[0,i].imshow(sec_mod_trues[i,:,:], cmap='gray'); axs[0,i].tick_params(left=False, bottom=False, labelleft=False, labelbottom=False) 
+                im0 = axs[0,i].imshow(sec_mod_trues[i,:,:], cmap='gray', vmin=-150, vmax=150); axs[0,i].tick_params(left=False, bottom=False, labelleft=False, labelbottom=False) 
                 if i in sec_gap_idxs:
                     axs[0,i].plot(np.linspace(0, 209, 209), np.linspace(0, 209, 209), c='red')
-                im1 = axs[1,i].imshow(preds[sec_idxs,:,:][i,:,:], cmap='gray'); axs[1,i].tick_params(left=False, bottom=False, labelleft=False, labelbottom=False) 
+                im1 = axs[1,i].imshow(preds[sec_idxs,:,:][i,:,:], cmap='gray', vmin=-150, vmax=150); axs[1,i].tick_params(left=False, bottom=False, labelleft=False, labelbottom=False) 
 
-    return preds, fig
+        
+    return preds
 
 
+def scale_validation_predictions(inputs, nonscl_preds, len_set, plot_check=True):
+    '''
+    Create scaled versions of predictions for full-day validation sets
+    '''
+    
+    # Initialize output
+    preds_scale = np.copy(inputs)
+    
+    # Re-find the locations of gaps in the input, and re-create sets around those gaps
+    gap_idxs = np.where(np.sum(inputs, axis=(1,2)) == 0)[0]
+    diffs = np.diff(gap_idxs) # gives gap_idxs[i]-gap_idxs[i-1] for all i>0 (so length is len(gap_idxs)-1)
+    split_idxs = [i+1 for i in range(len(diffs)) if diffs[i]> 1]
+    gap_sections = np.array_split(gap_idxs, split_idxs) # array of arrays, with each array being idxs of given gap
+    gap_ctrs = [int(np.mean(gap_idxs)) for gap_idxs in gap_sections]  
+    
+    # print('')
+    # print('gap_ctrs', gap_ctrs,'\n')
+    
+    # Loop over the gap ctrs
+    for i in range(len(gap_ctrs)):
+        
+        # Re-get the input section at the len_set idxs centered on the center of the gap
+        gap_idxs = gap_sections[i] 
+        gap_ctr = gap_ctrs[i]
+        n = int(len_set/2)
+        sec_idxs = list(np.linspace(gap_ctr-n+1, gap_ctr-1, n-1, dtype=int)) + [gap_ctr] + list(np.linspace(gap_ctr+1, gap_ctr+n, n, dtype=int)) # model input section (len_set/2 on either side of the gap_idxs)
+        sec_start = sec_idxs[0]
+        sec_end = sec_idxs[1]
+        section = inputs[sec_idxs,:,:]
+          
+        # Remove unexpected missing images (just so that we can get the correct input min and max)
+        section = remove_unexpected_gaps(section, inputs, sec_idxs, sec_start, gap_idxs)
+        
+        # Get the corresponding section of non-scaled predictions
+        sec_preds_nonscl = nonscl_preds[sec_idxs,:,:]
+        
+        # Scale the predictions
+        sec_nongap_idxs = np.where(np.sum(section, axis=(1,2)) != 0)[0]
+        section_nongap = section[sec_nongap_idxs]
+        section_min = np.min(section_nongap, axis=0) # shape (n_pix, n_pix)
+        section_max = np.max(section_nongap, axis=0)
+        sec_gap_idxs = np.where(np.sum(section, axis=(1,2)) == 0)[0]
+        sec_preds_gap = sec_preds_nonscl[sec_gap_idxs]
+        sec_preds_min = np.min(sec_preds_gap, axis=0)
+        sec_preds_max = np.max(sec_preds_gap, axis=0)
+        sec_preds_scale = section_min + (sec_preds_nonscl - sec_preds_min) * (section_max - section_min) / (sec_preds_max - sec_preds_min)
+
+        # Put the scaled predictions for this section in for the gap idxs in scaled predictions output
+        sec_gap_idxs = np.where(np.sum(section, axis=(1, 2)) == 0)[0] # idxs within the input section that are the gap (should be, e.g. 10-29 if 20-min gaps)
+        preds_scale[gap_idxs,:,:] = sec_preds_scale[sec_gap_idxs]
+
+        # Plot to check quailty 
+        if plot_check:
+            #sec_mod_inps = inputs[sec_idxs,:,:]
+            fig, axs = plt.subplots(2, len_set, figsize=(len_set, 2))
+            for i in range(len_set):
+                #im0 = axs[0,i].imshow(sec_mod_inps[i,:,:], cmap='gray'); axs[0,i].tick_params(left=False, bottom=False, labelleft=False, labelbottom=False) 
+                im0 = axs[0,i].imshow(sec_preds_nonscl[i,:,:], cmap='gray', vmin=-150, vmax=150); axs[0,i].tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+                im1 = axs[1,i].imshow(preds_scale[sec_idxs,:,:][i,:,:], cmap='gray', vmin=-150, vmax=150); axs[1,i].tick_params(left=False, bottom=False, labelleft=False, labelbottom=False) 
+                
+        # DEBUG: check that none of the scaled preds are zero-images
+        if len(np.where(np.sum(preds_scale[sec_idxs,:,:], axis=(1, 2)) == 0)[0]) > 0:
+            print('')
+            print(f'ERROR: For gap centered at {gap_ctr} (gap {i}), scaled predictions for some reason have {len(np.where(np.sum(preds_scale[sec_idxs,:,:], axis=(1, 2)) == 0)[0])} zero-images')
+            #print(f'  The non-scaled predictions have {len(np.where(np.sum(sec_nonscl_preds, axis=(1, 2)) == 0)[0])} zero-images')
+            print('Debugging output:','\n')
+            print('   gap_ctr', gap_ctr)
+            print('   sec_idxs', sec_idxs)
+            print('   section shape', section.shape)
+            print('   sec_preds_nonscl shape', sec_preds_nonscl.shape)
+            print('   np.sum(sec_preds_nonscl, axis=(1, 2))', np.sum(sec_preds_nonscl, axis=(1, 2)))
+            print('')
+            print('   sec_nongap_idxs', sec_nongap_idxs)
+            print('   section_min shape', section_min.shape)
+            print('   sec_gap_idxs', sec_gap_idxs)
+            print('   section_min shape', section_min.shape)
+            print('   sec_preds_scale shape', sec_preds_scale.shape)
+            print('   np.sum(sec_preds_scale, axis=(1, 2))', np.sum(sec_preds_scale, axis=(1, 2)))  
+            print(f'   The zero-images in sec_preds_nonscl are at section idxs {np.where(np.sum(sec_preds_nonscl, axis=(1, 2)) == 0)[0]}') 
+            print(f'   The zero-images in sec_preds_scale are at section idxs {np.where(np.sum(sec_preds_scale, axis=(1, 2)) == 0)[0]}') 
+            print(f'   The zero-images in preds_scale are at full sequence idxs {np.where(np.sum(preds_scale, axis=(1, 2)) == 0)[0]}') 
+            print(f'   The zero-images in preds_scale are at the following idxs when looking only at the section (e.g. np.sum(preds_scale[sec_idxs,:,:], axis=(1, 2))) {np.sum(preds_scale[sec_idxs,:,:], axis=(1, 2))}')
+            print(f'   len(np.where(np.sum(preds_scale[sec_idxs,:,:], axis=(1, 2)) == 0)[0]) {len(np.where(np.sum(preds_scale[sec_idxs,:,:], axis=(1, 2)) == 0)[0])}')
+            a=b
+    
+    return preds_scale
+    
+
+def remove_unexpected_gaps(section, inputs, sec_idxs, sec_start, gap_idxs):
+    '''
+    Deal with the case where there are gaps in the non-gap portions of the a section of a full-day input
+    In the mock data, this would happen if the gaps are too close together
+    For now, just use LI to remove unexpected gaps. In the future, train models to work on gaps at any position. 
+    '''
+    
+    # Find any idxs that should be non-gap but have a missing image
+    expected_nongap_idxs = [idx for idx in sec_idxs if idx not in gap_idxs]
+    sec_expected_non_gap = section[expected_nongap_idxs-sec_start] # np.delete(section, expected_gap_idxs, axis=0) # section[~expected_gap_idxs,:,:]
+    expected_filled_have_gaps = np.sum(sec_expected_non_gap, axis=(1, 2)) == 0
+    
+    # If there are any, fill them with LI
+    if np.any(expected_filled_have_gaps):  
+        
+        # Get the starts and ends of each unexpected gap (there could be multiple)
+        starts = np.where(expected_filled_have_gaps, np.maximum.accumulate(np.where(expected_filled_have_gaps & ~np.concatenate(([False], expected_filled_have_gaps[:-1])), expected_nongap_idxs, -1)), np.nan)
+        ends = np.where(expected_filled_have_gaps, np.minimum.accumulate(np.where(expected_filled_have_gaps & ~np.r_[expected_filled_have_gaps[1:], False], expected_nongap_idxs, np.inf)[::-1])[::-1], np.nan)
+        starts = np.unique(starts[~np.isnan(starts)]) #+ sec_start
+        ends = np.unique(ends[~np.isnan(ends)]) #+ sec_start
+        
+        # Loop over the unexpected gaps and fill them with LI
+        for j in range(len(starts)):
+            
+            # Get the idxs within the original 1440 sequence 
+            true_start_idx = starts[j] # idx in the ORIGINAL 1440 seqence 
+            true_end_idx = ends[j] # idx in the ORIGINAL 1440 seqence 
+            unexp_gap_idxs = np.linspace(true_start_idx, true_end_idx, int(true_end_idx-true_start_idx)+1)
+            
+            # Find before-gap image (if section starts with gap, must check backwards through preceeding images)
+            if true_start_idx != sec_idxs[0]:
+                before_gap_img = inputs[int(true_start_idx-1),:,:]
+                idx_in_gap = 0 # the first idx of the gap we see is indeed the first idx of the gap, so start at 0
+            else:
+                before_gap_img = np.zeros((209, 209))
+                count = 1
+                while np.sum(before_gap_img) == 0:
+                    before_gap_img = inputs[int(true_start_idx-1-count),:,:]
+                    count += 1
+                idx_in_gap = count # the first idx of the gap we see is NOT the first idx of the gap, so start at how far it actually is into the gap
+           
+            # Find after-gap image (if section ends with gap, must check backwards through preceeding images)
+            if true_end_idx != sec_idxs[-1]:
+                after_gap_img = inputs[int(true_end_idx+1),:,:]
+            else:
+                after_gap_img = np.zeros((209, 209))
+                count = 1
+                while np.sum(after_gap_img) == 0:
+                    after_gap_img = inputs[int(true_end_idx+1+count),:,:]
+                    count += 1
+            
+            # Fill unexpected gap with LI
+            filled_unexp_gap = np.empty((len(unexp_gap_idxs), 209, 209))
+            for k in range(len(unexp_gap_idxs)):
+                weight = idx_in_gap/len(unexp_gap_idxs)
+                interp_img = (1 - weight) * before_gap_img + weight * after_gap_img
+                filled_unexp_gap[k] = interp_img
+                idx_in_gap += 1 
+                
+            # Put the LI into the section in place of the missing images
+            section[unexp_gap_idxs.astype(int)-sec_start] = filled_unexp_gap
+
+    return section
+    
 
 def get_li_metrics(dataset):
     '''
@@ -521,11 +676,16 @@ def get_li_metrics(dataset):
         true = np.load(f'{output_dir}/{truefiles[i]}')
         pred = np.load(f'{output_dir}/{predfiles[i]}')
         inp = np.load(f'{output_dir}/{inputfiles[i]}')
+        
+        # Normalize (added 09/10/26)
+        minimum = np.min(true); maximum = np.max(true)
+        true = (true - minimum) / (maximum - minimum)
+        pred = (pred - minimum) / (maximum - minimum)  
 
         # Get idxs of the gaps
         use_idxs = np.where(np.max(inp, axis=(1,2)) == np.min(inp, axis=(1,2)))[0] # WONT STILL BE ZEROS AFTER NORMLIZATION, SO JUST CHECK IF ALL THE SAME
 
-        # Compute metrics
+        # Compute metrics (only over the gap idxs)
         smrse = 0
         sr2 = 0
         srho = 0
@@ -544,8 +704,7 @@ def get_li_metrics(dataset):
     
     return out           
 
-
-            
+     
 def save_li_filled_set(dataset):
     '''
     Fill gapped dataset using simple linear interpolation (mean of boundaries)
@@ -636,8 +795,6 @@ def get_mod_dir_with_given_ds(dataset):
     while not found and i < len(all_mod_dirs):
         mod_dir = all_mod_dirs[i]
         exp_dict = json.load(open(f'../../model_runs/{mod_dir}/exp_file.json','rb'))
-        
-        if mod_dir == 'UNet21': print(exp_dict['dataset'], dataset)
         
         if 'dataset' in exp_dict.keys() and exp_dict['dataset'] == dataset: 
             if 'test_preds_scale' in os.listdir(f'../../model_runs/{mod_dir}'):

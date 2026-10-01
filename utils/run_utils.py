@@ -39,7 +39,7 @@ def train_net(loader, model, loss_name, ctr_wgt, optimizer, device, save_example
         loss_func = getattr(loss_funcs, loss_name) # e.g. nn.MSELoss()
         if loss_name == 'MSE':
             loss = loss_func(predictions, targets) 
-        elif loss_name in ['Selected_MSE', 'Tuned_MSE', 'Selected_SSI', 'Selected_MSE_1D']:
+        elif loss_name in ['Selected_MSE', 'Tuned_MSE', 'Selected_SSI', 'Selected_MSE_1D', 'CtrOnly_MSE', 'OtrOnly_MSE']:
             loss = loss_func(predictions, targets, data) 
         elif loss_name in ['Regional_MSE', 'Gradational_MSE']:
             loss = loss_func(predictions, targets, data, ctr_wgt) 
@@ -56,7 +56,7 @@ def train_net(loader, model, loss_name, ctr_wgt, optimizer, device, save_example
     return loss # this is loss from most recent train batch
 
 
-def get_model(d, xs0, device):
+def get_model(d, xs0, device, only_centers, only_outers):
     '''
     Helper function to return model 
     '''
@@ -71,6 +71,9 @@ def get_model(d, xs0, device):
     elif d['model_name'] == 'UNet2':
         convblock_depth = 2 if 'convblock_depth' not in d.keys() else d['convblock_depth']
         model = models.UNet2(len_set=xs0.shape[1], convblock_depth=convblock_depth).to(device)
+    elif d['model_name'] == 'UNet_n':
+        convblock_depth = 2 if 'convblock_depth' not in d.keys() else d['convblock_depth']
+        model = models.UNet_n(len_set=xs0.shape[1], convblock_depth=convblock_depth, only_centers=only_centers, only_outers=only_outers).to(device)
     elif d['model_name'] == 'BRITS_mod':
         model = models.BRITS_mod(rnn_hid_size=d['rnn_hid_size'], seq_len=d['seq_len']).to(device)
     elif d['model_name'] == 'CNN1D':
@@ -109,28 +112,32 @@ def save_model_results(val_loader, file_names, save_dir, model, device='cpu', pr
         else:
             X, y = dat
             X, y = X.to(device), y.to(device)
-            if torch.is_tensor(y):
-                y = y.cpu().detach().numpy()
 
         # Pass normalized inputs to model, re-scale predictions
         X_norm = (X - torch.min(X[~torch.isnan(X)])) / (torch.max(X[~torch.isnan(X)]) - torch.min(X[~torch.isnan(X)]))
         preds_norm = model(X_norm).cpu().detach()
         preds = preds_norm * (torch.max(X[~torch.isnan(X)]) - torch.min(X[~torch.isnan(X)])) + torch.min(X[~torch.isnan(X)]) # re-scale 
-        preds = preds.numpy()
         
         # Save preds
-        if preds.shape[0] > 1: # if not pixel-wise
+        if preds.shape[1] > 1: # if not pixel-wise 
             for j in range(np.shape(preds)[0]):
                 
+                # If there is only 1 obs in the batch, then for some reason X[j=0] has shape (1,N_t,N_pix,N_pix) instead of (N_t,N_pix,N_pix)
+                if np.shape(preds)[0] == 1:
+                    X[j] = torch.squeeze(X[j])
+                    y[j] = torch.squeeze(y[j])
+                    preds[j] = torch.squeeze(preds[j])
+                
                 # Save inputs, predictions, and trues
-                np.save(f'{save_dir}/x_{i}', X[j].cpu().detach().numpy())
-                np.save(f'{save_dir}/true_{i}', np.array(y[j]))
-                np.save(f'{save_dir}/pred_{i}', np.array(preds[j]))
+                shortts_str = '_shortts' if shortts else ''
+                np.save(f'{save_dir}/x{shortts_str}_{i}', X[j].detach().numpy())
+                np.save(f'{save_dir}/true{shortts_str}_{i}', y[j].detach().numpy())
+                np.save(f'{save_dir}/pred{shortts_str}_{i}', preds[j].detach().numpy())
                 
                 # If short-timescale-only model, save full and long-ts-only inputs and trues too
                 if shortts:
-                    np.save(f'{save_dir}/x_og_{i}', X_og[j].cpu().detach().numpy())
-                    np.save(f'{save_dir}/true_og_{i}', np.array(y_og[j]))
+                    np.save(f'{save_dir}/x_{i}', X_og[j].cpu().detach().numpy())
+                    np.save(f'{save_dir}/true_{i}', np.array(y_og[j]))
                     np.save(f'{save_dir}/x_longts_{i}', X_longts[j].cpu().detach().numpy())
                     np.save(f'{save_dir}/true_longts_{i}', np.array(y_longts[j]))
 
