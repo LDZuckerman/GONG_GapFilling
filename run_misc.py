@@ -21,6 +21,7 @@ parser.add_argument("-s", "--subset_folder", type=str, required=False)
 parser.add_argument("-l", "--set_length", type=str, required=False)
 parser.add_argument("-n", "--num_missing", type=str, required=False)
 parser.add_argument("-m", "--sample_method", type=str, required=False)
+parser.add_argument("-x", "--shortts", type=str, required=False)
 parser.add_argument("-r", "--redo", type=str, default='', required=False)
 parser.add_argument("-d", "--debug_mock", type=str, default='False', required=False)
 args = parser.parse_args()
@@ -41,15 +42,15 @@ elif args.task == 'create_dataset':
     set_length = int(args.set_length)
     num_missing = int(args.num_missing)
     sample_method = args.sample_method
-    shortts = args.shortts
-    redo = eval(str(args.redo))
+    shortts = eval(args.shortts)
+    redo = eval(args.redo)
     #debug_mock = eval(str(args.debug_mock))
     
     #from_tag = from_folder[-12:-8] if "shortts" in from_folder else from_folder[-4:] if "Subset" in from_folder else from_folder # e.g. '2019' from_folder[from_folder.find('Data')+5:from_folder.find(str(set_length))-1]
     from_tag = from_folder[-4:] if "Subset" in from_folder else from_folder
     print(f'Creating NN dataset from {from_folder}, using set_length = {set_length}, num_missing = {num_missing}, sample_method = {sample_method}, shortts = {shortts}')
 
-    data_utils.create_dataset(from_folder, from_tag, set_length, num_missing, sample_method, redo, shortts, dpath='../Data')   
+    data_utils.create_dataset(from_folder, from_tag, set_length, num_missing, sample_method, redo, shortts=shortts, dpath='../Data')   
 
     
 elif args.task == 'create_pixel_dataset':
@@ -151,6 +152,7 @@ elif args.task == 'redo_vals':
             convblock_depth = 2 if 'convblock_depth' not in d.keys() else d['convblock_depth']
             model = models.UNet(len_set=xs0.shape[1], convblock_depth=convblock_depth)
             model.load_state_dict(torch.load(f'../model_runs/{mod_name}/{mod_name}.pth', map_location=torch.device('cpu')))
+            model.eval()
 
             run_utils.save_model_results(test_loader, file_names=test_ds.x_sets, save_dir=f'../model_runs/{mod_name}/test_preds_new' , model=model) 
             #os.rename(f'../model_runs/{mod_name}/test_preds_old', f'../model_runs/{mod_name}/test_preds_norm') # rename old test_preds
